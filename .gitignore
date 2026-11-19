@@ -1,2 +1,34 @@
 config.inc.php
+config.inc.php.*
+!config.inc.php.dist
 .env
+.env.*
+!.env.example
+.envrc
+compose.override.y*ml
+compose.local.y*ml
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Roundcube runtime data, filing journals and message exports
+logs/
+temp/
+db/
+civicrm-filings/
+roundcube-civicrm-filing/
+*.log
+*.sqlite*
+*.db
+*.sql
+*.sql.gz
+*.eml
+*.mbox
+
+# Local editor settings and backup copies
+.idea/
+.vscode/
+*.bak
+*~
