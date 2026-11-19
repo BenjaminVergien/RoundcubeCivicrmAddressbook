@@ -7,6 +7,7 @@ services:
       CIVICRM_SITE_KEY: ${CIVICRM_SITE_KEY:-}
       CIVICRM_FILING_ENABLED: "${CIVICRM_FILING_ENABLED:-true}"
       CIVICRM_FILING_DIR: /var/roundcube/db/civicrm-filings
+      CIVICRM_FILING_MAX_MIB: "${CIVICRM_FILING_MAX_MIB:-25}"
     volumes:
       - ./civicrm_addressbook/civicrm_addressbook.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook.php:ro
       - ./civicrm_addressbook/civicrm_addressbook_instance.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook_instance.php:ro

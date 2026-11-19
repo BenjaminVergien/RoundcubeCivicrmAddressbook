@@ -28,4 +28,6 @@ $labels['headerfrom'] = 'From';
 $labels['headerto'] = 'To';
 $labels['headercc'] = 'Cc';
 $labels['headerdate'] = 'Date';
+$labels['mailtoolarge'] = 'This message exceeds the filing limit of %d MiB (including attachments).';
+$labels['sizeunknown'] = 'Could not determine the message size. Filing stopped.';
 $labels['openactivity'] = 'Open CiviCRM activity';

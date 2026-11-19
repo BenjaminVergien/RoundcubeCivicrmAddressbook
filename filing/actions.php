@@ -119,18 +119,30 @@ class civicrm_filing
                 if (!ctype_digit($uid) || !is_string($folder) || $folder === '') {
                     throw new DomainException('invalidrequest');
                 }
-                $mail = new rcube_message($uid, $folder);
-                if (!$mail->headers) {
+                $headers = $app->get_storage()->get_message_headers($uid, $folder);
+                if (!$headers) {
                     throw new DomainException('missingmail');
                 }
-                if ($action === 'preview') {
-                    $reply['subject'] = $mail->subject;
-                    $reply['sender'] = $mail->sender['mailto'] ?? '';
+                $limit = filter_var($app->config->get('civicrm_filing_max_mib', 25), FILTER_VALIDATE_INT,
+                    ['options' => ['min_range' => 1, 'default' => 25]]);
+                if (empty($headers->size)) {
+                    throw new DomainException('sizeunknown');
+                }
+                if ($headers->size > $limit * 1048576) {
+                    $reply['error'] = sprintf($this->plugin->gettext('mailtoolarge'), $limit);
+                } elseif ($action === 'preview') {
+                    $reply['subject'] = $headers->get('subject', true);
+                    $senders = rcube_mime::decode_address_list($headers->from, 1);
+                    $reply['sender'] = current($senders)['mailto'] ?? '';
                 } elseif ($action === 'file') {
                     $id = (string) ($_POST['contact'] ?? '');
                     $book = new civicrm_addressbook_instance();
                     if (!ctype_digit($id) || !(int) $id || !$book->get_record($id, true)) {
                         throw new DomainException('lookupfailed');
+                    }
+                    $mail = new rcube_message($uid, $folder);
+                    if (!$mail->headers) {
+                        throw new DomainException('missingmail');
                     }
                     $reply = $this->file($mail, (int) $id);
                 } else {

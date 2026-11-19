@@ -7,3 +7,4 @@ $config['civicrm_log_searches'] = true;
 $filing = getenv('CIVICRM_FILING_ENABLED');
 $config['civicrm_filing_enabled'] = $filing === false || filter_var($filing, FILTER_VALIDATE_BOOLEAN);
 $config['civicrm_filing_dir'] = getenv('CIVICRM_FILING_DIR') ?: null;
+$config['civicrm_filing_max_mib'] = getenv('CIVICRM_FILING_MAX_MIB') ?: 25;

@@ -31,6 +31,8 @@ $config['civicrm_filing_dir'] = '/var/lib/roundcube/civicrm-filings';
 
 Give the API account permission to create activities. Use persistent storage outside the web root that the Roundcube PHP process can write. The sample configuration enables filing by default. Without a configured journal directory the plugin uses a subdirectory of the system temporary directory.
 
+The plugin checks the IMAP message size before loading the body or contacting CiviCRM. The default filing limit is 25 MiB for the entire encoded message, including headers and attachments. A message exactly at the limit is accepted. Attachments are still excluded from the activity. To change the local limit, set `$config['civicrm_filing_max_mib'] = 50;` or, with Compose, `$env:CIVICRM_FILING_MAX_MIB = '50'` before running the Compose command. Use a positive whole number of MiB. The CiviCRM server and its web server can impose separate request limits.
+
 ## Local development
 
 The parent project's Compose file runs Roundcube and GreenMail. From the project directory in PowerShell:

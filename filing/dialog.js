@@ -183,12 +183,13 @@ rcmail.addEventListener('init', function () {
         results.on('change', 'input', () => saveButton.prop('disabled', false));
         dialog.on('dialogclose', () => { closed = true; clearTimeout(timer); });
         status.text(t('minchars'));
+        input.prop('disabled', true);
         request({...message, op: 'preview'}).then(data => {
             if (closed) return;
+            input.prop('disabled', false).trigger('focus');
             subject.text(data.subject || t('nosubject'));
             if (!revision && data.sender) input.val(data.sender).trigger('input');
         }).catch(error => status.text(error.message));
-        input.trigger('focus');
     }, !!rcmail.get_single_uid());
     if (rcmail.message_list) {
         rcmail.message_list.addEventListener('select', () => {
