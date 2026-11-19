@@ -11,16 +11,19 @@ rcmail.addEventListener('init', function () {
         }
     `;
     document.head.append(style);
+    function activityUrl(status) {
+        if (!status?.id || !rcmail.env.civicrm_activity_url) return null;
+        const url = new URL(rcmail.env.civicrm_activity_url);
+        url.searchParams.set('action', 'view');
+        url.searchParams.set('id', status.id);
+        url.searchParams.set('cid', status.cid);
+        url.searchParams.set('context', 'activity');
+        return url;
+    }
     function badge(anchor, status, inside = false) {
         if (!anchor) return;
         const existing = inside ? anchor.firstElementChild : anchor.previousElementSibling;
-        const url = status?.id && rcmail.env.civicrm_activity_url ? new URL(rcmail.env.civicrm_activity_url) : null;
-        if (url) {
-            url.searchParams.set('action', 'view');
-            url.searchParams.set('id', status.id);
-            url.searchParams.set('cid', status.cid);
-            url.searchParams.set('context', 'activity');
-        }
+        const url = activityUrl(status);
         if (existing?.classList.contains('civicrm-filed-mark')) {
             if (status && existing.dataset.url === (url?.href || '')) return;
             existing.remove();
@@ -175,22 +178,24 @@ rcmail.addEventListener('init', function () {
                         }
                     } catch { /* The opener may have navigated to another origin. */ }
                 }
-                if (data.attachments?.length) {
-                    const summary = $('<strong>').text(t('activitysaved') + ' #' + data.id);
-                    const list = $('<ul>');
-                    status.empty().append(summary, list);
-                    for (const item of data.attachments) {
-                        $('<li>').text(item.message).appendTo(list);
-                        attachments.find('input').filter((i, box) => box.value === item.id)
-                            .prop('checked', !item.confirmed).prop('disabled', item.confirmed);
-                    }
-                    finished = data.attachments.every(item => item.confirmed);
-                    saveButton.text(t(finished ? 'done' : 'retryattachments')).prop('disabled', false);
-                    saving = false;
-                    return;
+                finished = true;
+                form.children().not(status).hide();
+                status.text(t('activitysent') + ' ');
+                const url = activityUrl({id: data.id, cid: contact});
+                const label = t('checkactivity') + ' (#' + data.id + ')';
+                if (url) {
+                    $('<a>').attr({href: url.href, target: '_blank', rel: 'noopener noreferrer'}).text(label).appendTo(status);
+                } else {
+                    status.append(document.createTextNode(label));
                 }
-                rcmail.display_message(t(data.already ? 'alreadyfiled' : 'filed') + ' #' + data.id, 'confirmation');
-                dialog.dialog('close');
+                const unconfirmed = (data.attachments || []).filter(item => !item.confirmed);
+                if (unconfirmed.length) {
+                    const details = $('<details>').appendTo(status);
+                    $('<summary>').text(t('attachmentnotice')).appendTo(details);
+                    const list = $('<ul>').appendTo(details);
+                    for (const item of unconfirmed) $('<li>').text(item.message).appendTo(list);
+                }
+                saveButton.text(t('done')).prop('disabled', false).trigger('focus');
             }).catch(error => {
                 status.text(error.message);
                 saving = false;
