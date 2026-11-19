@@ -1,6 +1,35 @@
 # CiviCRM address book for Roundcube
 
-A read-only, search-only address book for Roundcube 1.7. Search by name or email from three characters, including in recipient autocomplete. Results use the primary email, primary phone and CiviCRM contact ID. Roundcube handles personal contacts separately.
+Roundcube 1.7 users can search CiviCRM contacts by name or email from three characters, including in recipient autocomplete. The read-only address book returns the primary email, primary phone and contact ID. Roundcube keeps personal contacts separately. An optional toolbar action files a selected message as a CiviCRM Email activity.
+
+## Install and configure
+
+1. Place the plugin in `plugins/civicrm_addressbook` and copy `config.inc.php.dist` to `config.inc.php` in that directory.
+2. Add `$config['plugins'][] = 'civicrm_addressbook';` after the enabled plugin list in Roundcube's main configuration.
+3. Configure the plugin in its own `config.inc.php`. The API URL and API key are required for both modes. All Roundcube users share the API account's contact visibility.
+
+### Address book only
+
+```php
+<?php
+$config['civicrm_api4_url'] = 'https://crm.example.org/civicrm/ajax/api4';
+$config['civicrm_api4_key'] = getenv('CIVICRM_API4_KEY');
+$config['civicrm_filing_enabled'] = false;
+$config['civicrm_log_searches'] = false;
+```
+
+Supply the key to the Roundcube PHP process. Use a dedicated CiviCRM account with API-key authentication and read access to the intended contacts, primary email addresses and phone numbers. The endpoint is the HTTPS APIv4 base URL. For a WordPress installation using query-string routing, an example is `https://crm.example.org/?civiwp=CiviCRM&q=civicrm/ajax/api4`. If the site requires a site key, add `$config['civicrm_site_key'] = getenv('CIVICRM_SITE_KEY');`.
+
+### Enable mail filing
+
+In the preceding configuration, change the filing setting and choose a journal directory:
+
+```php
+$config['civicrm_filing_enabled'] = true;
+$config['civicrm_filing_dir'] = '/var/lib/roundcube/civicrm-filings';
+```
+
+Give the API account permission to create activities. Use persistent storage outside the web root that the Roundcube PHP process can write. The sample configuration enables filing by default. Without a configured journal directory the plugin uses a subdirectory of the system temporary directory.
 
 ## Local development
 
@@ -8,14 +37,34 @@ The parent project's Compose file runs Roundcube and GreenMail. From the project
 
 ```powershell
 $env:CIVICRM_API4_URL = 'https://crm.example.org/civicrm/ajax/api4'
-$env:CIVICRM_API4_KEY = Read-Host 'Development CiviCRM API key'
+$env:CIVICRM_API4_KEY = (Get-Credential -UserName 'api' -Message 'Enter the development API key as the password').GetNetworkCredential().Password
+# If your site requires a site key, use the same prompt for CIVICRM_SITE_KEY.
+$env:CIVICRM_FILING_ENABLED = 'true'
 docker compose -f compose.yaml -f civicrm_addressbook/compose.dev.yaml up -d
 ```
 
 Open http://localhost:8088, log in and type three characters of a known CRM contact in the recipient field. The plugin source is mounted directly for editing. The CiviCRM source appears once both settings are present. All Roundcube users share the API user's contact visibility. Use a dedicated test account with permission to authenticate with an API key and read the intended contacts.
 
-For another Roundcube installation, place this directory in `plugins/civicrm_addressbook`, copy the sample configuration, supply both settings and append `civicrm_addressbook` to the enabled plugins.
+To inspect plugin diagnostics from the same directory:
+
+```powershell
+docker compose -f compose.yaml -f civicrm_addressbook/compose.dev.yaml logs --since 5m roundcube 2>&1 | Select-String -SimpleMatch '[civicrm_addressbook]'
+```
+
+When a lookup fails, match the logged `error_id` to the CiviCRM log entry if available. Enable `civicrm_log_searches` in the plugin configuration to include successful lookup counts during troubleshooting.
+
+## File an existing message
+
+Filing is enabled by default. For an address-book-only installation, set `$config['civicrm_filing_enabled'] = false;` in the plugin's `config.inc.php`. With Compose, set `$env:CIVICRM_FILING_ENABLED = 'false'` before running the Compose command above. This disables the filing endpoint, buttons and activity indicators. Contact search and autocomplete only need read access.
+
+Select one message or open it, then choose **File in CRM** (German: **In CRM ablegen**). The dialog initially searches for the sender. Search for another name or address if needed, select the intended contact by address and CRM ID, and confirm. The plugin reads the message from the current user's IMAP mailbox. It creates a completed Email activity with the message date, subject, From, To, Cc and plain-text body. HTML mail is converted to text. Attachments are excluded. The API user is recorded as the creator. Filing produces no outgoing email.
+
+A CiviCRM logo marks filed messages. For new filings, the logo and **View activity** open the first recorded activity for the message, even if the message is subsequently filed with another contact. The UI follows the Roundcube locale, with English and German translations.
+
+For production, set `civicrm_filing_dir` to a persistent directory outside the web root, writable by PHP. Compose uses the Roundcube database volume. A file per message/contact pair records the created activity ID. If the remote outcome is unknown, the reservation stays pending. Before clearing a pending reservation, check the contact's activity history to avoid filing the message twice.
 
 ## Provenance
 
-Based on [Jaap Jansma's RoundcubeCivicrmAddressbook](https://github.com/jaapjansma/RoundcubeCivicrmAddressbook). The first local commit contains the original PHP files and README. The APIv4 version uses Contact.get over HTTPS. Group browsing and filing email as activities are outside this first version.
+Based on [Jaap Jansma's RoundcubeCivicrmAddressbook](https://github.com/jaapjansma/RoundcubeCivicrmAddressbook). The first local commit contains the original PHP files and README. The APIv4 version uses Contact.get and Activity.create over HTTPS.
+
+The CiviCRM mark in the message list and toolbar is adapted from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/civicrm.svg).
