@@ -155,14 +155,17 @@ class civicrm_filing
                             throw new DomainException('lookupfailed');
                         }
                         $reply = $this->file($mail, (int) $id);
+                        $reply['attachments'] = [];
                         foreach (array_unique($selected) as $part) {
+                            $label = 'attachmentconfirmed';
                             try {
                                 $this->attach($mail, $reply['id'], $parts[$part]);
                             } catch (Throwable $e) {
-                                $label = $e->getMessage() === 'attachmentfailed' ? 'attachmentfailed' : 'attachmentuncertain';
-                                $reply['warning'] = sprintf($this->plugin->gettext($label), $parts[$part]['name']);
-                                break;
+                                $label = $e instanceof DomainException && in_array($e->getMessage(), ['attachmentfailed', 'attachmentdenied', 'attachmentlimit'], true)
+                                    ? $e->getMessage() : 'attachmentuncertain';
                             }
+                            $reply['attachments'][] = ['id' => $part, 'confirmed' => $label === 'attachmentconfirmed',
+                                'message' => sprintf($this->plugin->gettext($label), $parts[$part]['name'])];
                         }
                     }
                 } else {
@@ -228,15 +231,18 @@ class civicrm_filing
             $response = civicrm_api4_http::attach($activity, $part['name'], $part['type'], $bytes);
             $status = $response->getStatusCode();
             $data = json_decode((string) $response->getBody(), true);
-            if ($status === 200 && isset($data['is_error']) && !$data['is_error'] && (int) ($data['id'] ?? 0) > 0) {
-                $this->record($file, (string) $data['id']);
+            $created = $data['id'] ?? null;
+            if (!$created && is_array($data['values'] ?? null) && count($data['values']) === 1) {
+                $created = reset($data['values'])['id'] ?? null;
+            }
+            if ($status >= 200 && $status < 300 && isset($data['is_error']) && !$data['is_error'] && (int) $created > 0) {
+                $this->record($file, (string) $created);
                 return;
             }
             error_log('[civicrm_addressbook] Attachment.create http=' . $status);
-            if (in_array($status, [400, 401, 403, 404, 405, 413, 415, 422], true)
-                || ($data['error_code'] ?? '') === 'unauthorized') {
+            if (in_array($status, [401, 403, 413], true) || ($data['error_code'] ?? '') === 'unauthorized') {
                 $this->record($file, '');
-                throw new DomainException('attachmentfailed');
+                throw new DomainException($status === 413 ? 'attachmentlimit' : 'attachmentdenied');
             }
             throw new DomainException('attachmentuncertain');
         } finally {

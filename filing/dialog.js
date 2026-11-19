@@ -125,8 +125,8 @@ rcmail.addEventListener('init', function () {
             .appendTo($('<label>').css('display', 'block').text(t('searchcontact')).appendTo(form));
         const results = $('<div role="radiogroup">').attr('aria-label', t('matches'))
             .css({maxHeight: '32vh', overflowY: 'auto'}).appendTo(form);
-        const status = $('<p role="status">').appendTo(form);
-        let revision = 0, timer, saving = false, closed = false;
+        const status = $('<div role="status">').appendTo(form);
+        let revision = 0, timer, saving = false, closed = false, finished = false;
         input.on('input', function () {
             const current = ++revision, term = input.val().trim();
             clearTimeout(timer);
@@ -153,6 +153,7 @@ rcmail.addEventListener('init', function () {
             }, 250);
         });
         const dialog = rcmail.simple_dialog(form, t('filemail'), function () {
+            if (finished) { dialog.dialog('close'); return false; }
             if (saving) return false;
             const contact = results.find('input:checked').val();
             if (!contact) {
@@ -174,10 +175,18 @@ rcmail.addEventListener('init', function () {
                         }
                     } catch { /* The opener may have navigated to another origin. */ }
                 }
-                if (data.warning) {
-                    status.text('#' + data.id + ' — ' + data.warning);
+                if (data.attachments?.length) {
+                    const summary = $('<strong>').text(t('activitysaved') + ' #' + data.id);
+                    const list = $('<ul>');
+                    status.empty().append(summary, list);
+                    for (const item of data.attachments) {
+                        $('<li>').text(item.message).appendTo(list);
+                        attachments.find('input').filter((i, box) => box.value === item.id)
+                            .prop('checked', !item.confirmed).prop('disabled', item.confirmed);
+                    }
+                    finished = data.attachments.every(item => item.confirmed);
+                    saveButton.text(t(finished ? 'done' : 'retryattachments')).prop('disabled', false);
                     saving = false;
-                    input.add(results.find('input')).add(attachments.find('input')).add(saveButton).prop('disabled', false);
                     return;
                 }
                 rcmail.display_message(t(data.already ? 'alreadyfiled' : 'filed') + ' #' + data.id, 'confirmation');
@@ -204,7 +213,7 @@ rcmail.addEventListener('init', function () {
                 const row = $('<label>').css({display: 'block', overflowWrap: 'anywhere'}).appendTo(attachments);
                 $('<input type="checkbox">').val(part.id)
                     .prop('checked', part.type === 'application/pdf' || /\.pdf$/i.test(part.name)).appendTo(row);
-                const size = (part.exactSize ? '' : '≈ ') + sizeFormat.format(part.size / 1024) + ' KiB';
+                const size = (part.exactSize ? '' : '≈ ') + (part.size < 1024 ? part.size + ' B' : sizeFormat.format(part.size / 1024) + ' KiB');
                 row.append(document.createTextNode(' ' + part.name + ' (' + size + ')'));
             }
             if (!revision && data.sender) input.val(data.sender).trigger('input');
