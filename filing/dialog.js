@@ -119,6 +119,8 @@ rcmail.addEventListener('init', function () {
         const form = $('<div>');
         const subject = $('<strong>').appendTo(form);
         $('<p>').text(t('scope')).appendTo(form);
+        const attachments = $('<fieldset>').hide().appendTo(form);
+        $('<legend>').text(t('attachments')).appendTo(attachments);
         const input = $('<input type="search" class="form-control">')
             .appendTo($('<label>').css('display', 'block').text(t('searchcontact')).appendTo(form));
         const results = $('<div role="radiogroup">').attr('aria-label', t('matches'))
@@ -160,7 +162,9 @@ rcmail.addEventListener('init', function () {
             saving = true;
             input.add(results.find('input')).add(saveButton).prop('disabled', true);
             status.text(t('saving'));
-            request({...message, op: 'file', contact}).then(data => {
+            const selected = attachments.find('input:checked').map((i, box) => box.value).get();
+            attachments.find('input').prop('disabled', true);
+            request({...message, op: 'file', contact, attachments: JSON.stringify(selected)}).then(data => {
                 const filed = {...message, marker: data.marker};
                 remember(filed);
                 for (const other of new Set([window.parent, window.opener])) {
@@ -170,12 +174,18 @@ rcmail.addEventListener('init', function () {
                         }
                     } catch { /* The opener may have navigated to another origin. */ }
                 }
+                if (data.warning) {
+                    status.text('#' + data.id + ' — ' + data.warning);
+                    saving = false;
+                    input.add(results.find('input')).add(attachments.find('input')).add(saveButton).prop('disabled', false);
+                    return;
+                }
                 rcmail.display_message(t(data.already ? 'alreadyfiled' : 'filed') + ' #' + data.id, 'confirmation');
                 dialog.dialog('close');
             }).catch(error => {
                 status.text(error.message);
                 saving = false;
-                input.add(results.find('input')).add(saveButton).prop('disabled', false);
+                input.add(results.find('input')).add(attachments.find('input')).add(saveButton).prop('disabled', false);
             });
             return false;
         }, {button: t('filebutton'), button_class: 'save', width: 530, height: 500});
@@ -188,6 +198,15 @@ rcmail.addEventListener('init', function () {
             if (closed) return;
             input.prop('disabled', false).trigger('focus');
             subject.text(data.subject || t('nosubject'));
+            const sizeFormat = new Intl.NumberFormat(document.documentElement.lang || undefined, {maximumFractionDigits: 1});
+            for (const part of data.attachments || []) {
+                attachments.show();
+                const row = $('<label>').css({display: 'block', overflowWrap: 'anywhere'}).appendTo(attachments);
+                $('<input type="checkbox">').val(part.id)
+                    .prop('checked', part.type === 'application/pdf' || /\.pdf$/i.test(part.name)).appendTo(row);
+                const size = (part.exactSize ? '' : '≈ ') + sizeFormat.format(part.size / 1024) + ' KiB';
+                row.append(document.createTextNode(' ' + part.name + ' (' + size + ')'));
+            }
             if (!revision && data.sender) input.val(data.sender).trigger('input');
         }).catch(error => status.text(error.message));
     }, !!rcmail.get_single_uid());

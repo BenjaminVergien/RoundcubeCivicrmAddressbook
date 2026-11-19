@@ -130,21 +130,41 @@ class civicrm_filing
                 }
                 if ($headers->size > $limit * 1048576) {
                     $reply['error'] = sprintf($this->plugin->gettext('mailtoolarge'), $limit);
-                } elseif ($action === 'preview') {
-                    $reply['subject'] = $headers->get('subject', true);
-                    $senders = rcube_mime::decode_address_list($headers->from, 1);
-                    $reply['sender'] = current($senders)['mailto'] ?? '';
-                } elseif ($action === 'file') {
-                    $id = (string) ($_POST['contact'] ?? '');
-                    $book = new civicrm_addressbook_instance();
-                    if (!ctype_digit($id) || !(int) $id || !$book->get_record($id, true)) {
-                        throw new DomainException('lookupfailed');
-                    }
+                } elseif (in_array($action, ['preview', 'file'], true)) {
                     $mail = new rcube_message($uid, $folder);
                     if (!$mail->headers) {
                         throw new DomainException('missingmail');
                     }
-                    $reply = $this->file($mail, (int) $id);
+                    $parts = $this->attachment_list($mail);
+                    if ($action === 'preview') {
+                        $reply = ['subject' => $mail->subject, 'sender' => $mail->sender['mailto'] ?? '',
+                            'attachments' => array_values($parts)];
+                    } else {
+                        $selected = json_decode($_POST['attachments'] ?? '[]', true);
+                        if (!is_array($selected) || !array_is_list($selected)) {
+                            throw new DomainException('invalidrequest');
+                        }
+                        foreach ($selected as $part) {
+                            if (!is_string($part) || !isset($parts[$part])) {
+                                throw new DomainException('invalidrequest');
+                            }
+                        }
+                        $id = (string) ($_POST['contact'] ?? '');
+                        $book = new civicrm_addressbook_instance();
+                        if (!ctype_digit($id) || !(int) $id || !$book->get_record($id, true)) {
+                            throw new DomainException('lookupfailed');
+                        }
+                        $reply = $this->file($mail, (int) $id);
+                        foreach (array_unique($selected) as $part) {
+                            try {
+                                $this->attach($mail, $reply['id'], $parts[$part]);
+                            } catch (Throwable $e) {
+                                $label = $e->getMessage() === 'attachmentfailed' ? 'attachmentfailed' : 'attachmentuncertain';
+                                $reply['warning'] = sprintf($this->plugin->gettext($label), $parts[$part]['name']);
+                                break;
+                            }
+                        }
+                    }
                 } else {
                     throw new DomainException('invalidrequest');
                 }
@@ -159,6 +179,69 @@ class civicrm_filing
         header('Cache-Control: no-store');
         echo json_encode($reply, JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
+    }
+
+    private function attachment_list(rcube_message $mail): array
+    {
+        $parts = [];
+        foreach ($mail->attachments as $part) {
+            $type = strtolower((string) $part->mimetype);
+            $disposition = strtolower((string) $part->disposition);
+            if (str_starts_with($type, 'image/') && ($disposition === 'inline'
+                || (!empty($part->content_id) && $disposition !== 'attachment'))) {
+                continue;
+            }
+            $id = (string) $part->mime_id;
+            $name = basename(str_replace('\\', '/', (string) $part->filename));
+            $name = preg_replace('/[[:cntrl:]]/', '_', $name);
+            $parts[$id] = ['id' => $id, 'name' => $name ?: 'attachment-' . $id,
+                'type' => $type ?: 'application/octet-stream', 'size' => (int) $part->size,
+                'exactSize' => !empty($part->exact_size)];
+        }
+        return $parts;
+    }
+
+    private function attach(rcube_message $mail, int $activity, array $part): void
+    {
+        $site = rcmail::get_instance()->config->get('civicrm_api4_url');
+        $key = hash('sha256', implode("\0", [$site, $activity, $part['id']]));
+        $file = fopen($this->directory() . '/attachment-' . $key, 'c+b');
+        if (!$file) {
+            throw new DomainException('attachmentfailed');
+        }
+        try {
+            if (!flock($file, LOCK_EX)) {
+                throw new DomainException('attachmentfailed');
+            }
+            $state = stream_get_contents($file);
+            if (ctype_digit($state) && (int) $state > 0) {
+                return;
+            }
+            if ($state !== '') {
+                throw new DomainException('attachmentuncertain');
+            }
+            $bytes = $mail->get_part_body($part['id']);
+            if (!is_string($bytes) || ($bytes === '' && $part['size'] > 0)) {
+                throw new DomainException('attachmentfailed');
+            }
+            $this->record($file, 'pending');
+            $response = civicrm_api4_http::attach($activity, $part['name'], $part['type'], $bytes);
+            $status = $response->getStatusCode();
+            $data = json_decode((string) $response->getBody(), true);
+            if ($status === 200 && isset($data['is_error']) && !$data['is_error'] && (int) ($data['id'] ?? 0) > 0) {
+                $this->record($file, (string) $data['id']);
+                return;
+            }
+            error_log('[civicrm_addressbook] Attachment.create http=' . $status);
+            if (in_array($status, [400, 401, 403, 404, 405, 413, 415, 422], true)
+                || ($data['error_code'] ?? '') === 'unauthorized') {
+                $this->record($file, '');
+                throw new DomainException('attachmentfailed');
+            }
+            throw new DomainException('attachmentuncertain');
+        } finally {
+            fclose($file);
+        }
     }
 
     private function file(rcube_message $mail, int $contact): array

@@ -188,7 +188,31 @@ class civicrm_api4_http
     {
         $config = rcmail::get_instance()->config;
         $url = rtrim($config->get('civicrm_api4_url'), '/') . '/' . $route;
-        $client = new \GuzzleHttp\Client(['timeout' => 12, 'connect_timeout' => 4, 'allow_redirects' => false]);
+        return self::send($url, ['form_params' => ['params' => json_encode($params, JSON_THROW_ON_ERROR)]]);
+    }
+
+    public static function attach(int $activity, string $name, string $type, string $bytes)
+    {
+        $base = rtrim(rcmail::get_instance()->config->get('civicrm_api4_url'), '/');
+        $url = preg_replace('~(/|%2f)api4$~i', '${1}rest', $base, 1, $replaced);
+        if (!$replaced) {
+            throw new RuntimeException('Invalid API base route');
+        }
+        // Attachment.create accepts the decoded bytes as a regular POST field.
+        $fields = ['entity' => 'Attachment', 'action' => 'create', 'json' => '1',
+            'entity_table' => 'civicrm_activity', 'entity_id' => (string) $activity,
+            'name' => $name, 'mime_type' => $type, 'content' => $bytes];
+        $parts = [];
+        foreach ($fields as $key => $value) {
+            $parts[] = ['name' => $key, 'contents' => $value];
+        }
+        return self::send($url, ['multipart' => $parts], 60);
+    }
+
+    private static function send(string $url, array $options, int $timeout = 12)
+    {
+        $config = rcmail::get_instance()->config;
+        $client = new \GuzzleHttp\Client(['timeout' => $timeout, 'connect_timeout' => 4, 'allow_redirects' => false]);
         if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
             throw new \RuntimeException('HTTPS required');
         }
@@ -197,10 +221,9 @@ class civicrm_api4_http
             $headers['X-Civi-Key'] = $siteKey;
         }
 
-        return $client->post($url, [
+        return $client->post($url, $options + [
             'http_errors' => false,
             'headers' => $headers,
-            'form_params' => ['params' => json_encode($params, JSON_THROW_ON_ERROR)],
         ]);
     }
 }
