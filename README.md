@@ -1,15 +1,21 @@
-# RoundcubeCivicrmAddressbook
+# CiviCRM address book for Roundcube
 
-Adds a global addressbook to Roundcube with contacts from CiviCRM. Requires database access to the civicrm database.
+A read-only, search-only address book for Roundcube 1.7. Search by name or email from three characters, including in recipient autocomplete. Results use the primary email, primary phone and CiviCRM contact ID. Roundcube handles personal contacts separately.
 
-## Installation instructions
+## Local development
 
-	cd your-roundcube-folder/
-	cd plugins
-	git clone https://github.com/jaapjansma/RoundcubeCivicrmAddressbook.git civicrm_addressbook
-	
+The parent project's Compose file runs Roundcube and GreenMail. From the project directory in PowerShell:
 
-Edit *config/config.inc.php*:
+```powershell
+$env:CIVICRM_API4_URL = 'https://crm.example.org/civicrm/ajax/api4'
+$env:CIVICRM_API4_KEY = Read-Host 'Development CiviCRM API key'
+docker compose -f compose.yaml -f civicrm_addressbook/compose.dev.yaml up -d
+```
 
-	$config['plugins'] = array(..., 'civicrm_addressbook');
-	$config['civicrm_db_dsn'] = 'mysql://civicrm_db_user:civicrm_db_password@localhost/civicrm_db';
+Open http://localhost:8088, log in and type three characters of a known CRM contact in the recipient field. The plugin source is mounted directly for editing. The CiviCRM source appears once both settings are present. All Roundcube users share the API user's contact visibility. Use a dedicated test account with permission to authenticate with an API key and read the intended contacts.
+
+For another Roundcube installation, place this directory in `plugins/civicrm_addressbook`, copy the sample configuration, supply both settings and append `civicrm_addressbook` to the enabled plugins.
+
+## Provenance
+
+Based on [Jaap Jansma's RoundcubeCivicrmAddressbook](https://github.com/jaapjansma/RoundcubeCivicrmAddressbook). The first local commit contains the original PHP files and README. The APIv4 version uses Contact.get over HTTPS. Group browsing and filing email as activities are outside this first version.

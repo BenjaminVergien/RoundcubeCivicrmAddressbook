@@ -1,318 +1,125 @@
 <?php
 
-class civicrm_addressbook_instance extends rcube_addressbook {
+class civicrm_addressbook_instance extends rcube_addressbook
+{
+    public $primary_key = 'ID';
+    public $readonly = true;
+    public $ready = true;
+    public $searchonly = true;
+    public $coltypes = ['name' => ['limit' => 1], 'email' => ['limit' => 1], 'phone' => ['limit' => 1]];
 
-	public $primary_key = 'ID';
-    public $groups        = true;
-    public $readonly      = true;
-    public $ready         = true;
-    public $list_page     = 1;
-    public $page_size     = 50;
-    public $sort_col      = 'name';
-    public $sort_order    = 'ASC';
-    public $date_cols     = array();
-    public $coltypes      = array(
-        'name'      => array('limit'=>1),
-        'email'     => array('limit'=>1),
-		'phone'     => array('limit'=>1),
-    );
+    private $filter;
+    private $result;
 
-	private $filter;
+    public function get_name() { return 'CiviCRM'; }
+    public function get_result() { return $this->result; }
+    public function get_search_set() { return $this->filter; }
+    public function set_search_set($filter): void { $this->filter = $filter; }
 
-	private $result;
-
-	private $gid = 0;
-
-	/**
-     * Returns addressbook name (e.g. for addressbooks listing)
-     */
-    function get_name() {
-		return 'civicrm';
-	}
-
-    /**
-     * Save a search string for future listings
-     *
-     * @param mixed Search params to use in listing method, obtained by get_search_set()
-     */
-    function set_search_set($filter) {
-		$this->filter = $filter;
-	}
-
-    /**
-     * Getter for saved search properties
-     *
-     * @return mixed Search properties used by this class
-     */
-    function get_search_set() {
-		return $this->filter;
-	}
-
-    /**
-     * Reset saved results and search parameters
-     */
-    function reset() {
-		$this->result = null;
-		$this->filter = null;
-	}
-
-	/**
-     * List the current set of contact records
-     *
-     * @param  array  List of cols to show
-     * @param  int    Only return this number of records, use negative values for tail
-     * @return array  Indexed list of contact records, each a hash array
-     */
-    function list_records($cols=null, $subset=0) {
-		$db = $this->getDb();
-       	$result = $this->count();
-		$offset = $this->page_size * ($this->list_page-1);
-		$clause = $this->filter ? (' (' . $this->filter . ') '):' 1 ';
-
-		$groupJoin = '';
-		$groupClause = '';
-		if (!empty($this->gid)) {
-			$groupJoin = " INNER JOIN civicrm_group_contact ON civicrm_group_contact.contact_id = civicrm_contact.id ";
-			$groupClause = " AND (civicrm_group_contact.status = 'Added' AND civicrm_group_contact.group_id = ".$db->escape($this->gid)." )";
-		} 
-		$db->query("
-			SELECT civicrm_contact.id as id, civicrm_contact.display_name, civicrm_email.email, civicrm_phone.phone
-			FROM civicrm_contact 
-			INNER JOIN civicrm_email ON civicrm_contact.id = civicrm_email.contact_id AND civicrm_email.is_primary = 1
-			{$groupJoin}
-			LEFT JOIN civicrm_phone ON civicrm_contact.id = civicrm_phone.contact_id AND civicrm_phone.is_primary = 1
-			WHERE {$clause}
-			{$groupClause}
-			AND civicrm_contact.is_deleted = 0 AND civicrm_contact.is_deceased = 0 
-			ORDER BY civicrm_contact.display_name, civicrm_email.email
-			LIMIT {$offset}, {$this->page_size}
-			");
-		while ($sql_arr = $db->fetch_assoc()) {		
-			$record = array(
-				'ID' => $sql_arr['id'],
-				'name' => $sql_arr['display_name'],
-				'email' => $sql_arr['email'],
-				'phone' => $sql_arr['phone'],
-			);
-			$result->add($record);
-		}
-		return $result;
-	}
-
-    /**
-     * Search records
-     *
-     * @param array   List of fields to search in
-     * @param string  Search value
-     * @param int     Search mode. Sum of self::SEARCH_*.
-     * @param boolean True if results are requested, False if count only
-     * @param boolean True to skip the count query (select only)
-     * @param array   List of fields that cannot be empty
-     *
-     * @return object rcube_result_set List of contact records and 'count' value
-     */
-    function search($fields, $value, $mode=0, $select=true, $nocount=false, $required=array()) {
-		$db = $this->getDb();
-		if ($fields == '*') {
-			$this->set_search_set($db->ilike('civicrm_contact.display_name', $value . '%')." OR ".$db->ilike('civicrm_email.email', $value . '%'));
-		} elseif ($fields == 'ID') {
-            $ids     = !is_array($value) ? explode(self::SEPARATOR, $value) : $value;
-            $ids     = $db->array2list($ids, 'integer');
-			$this->set_search_set('`civicrm_contact`.`id` IN ('.$ids.')');
-		} else {
-			$wheres = array();
-			foreach($fields as $fieldName) {
-				switch($fieldName) {
-					case 'name':
-						$wheres[] = $db->ilike('civicrm_contact.display_name', $value . '%');
-						break;
-					case 'email':
-						$wheres[] = $db->ilike('civicrm_email.email', $value . '%');
-						break;
-				}
-			}
-			if (count($wheres)) {
-				$this->set_search_set(join(' OR ', $wheres));
-			}
-		}
-		return $this->list_records();
-	}
-
-    /**
-     * Count number of available contacts in database
-     *
-     * @return rcube_result_set Result set with values for 'count' and 'first'
-     */
-    function count() {
-		$db = $this->getDb();		
-		$clause = $this->filter ? (' (' . $this->filter . ') '):' 1 ';
-
-		$groupJoin = '';
-		$groupClause = '';
-		if (!empty($this->gid)) {
-			$groupJoin = " INNER JOIN civicrm_group_contact ON civicrm_group_contact.contact_id = civicrm_contact.id ";
-			$groupClause = " AND (civicrm_group_contact.status = 'Added' AND civicrm_group_contact.group_id = ".$db->escape($this->gid)." )";
-		}
-		$db->query("
-			SELECT COUNT(*) as total
-			FROM civicrm_contact 
-			INNER JOIN civicrm_email ON civicrm_contact.id = civicrm_email.contact_id AND civicrm_email.is_primary = 1
-			{$groupJoin}
-			LEFT JOIN civicrm_phone ON civicrm_contact.id = civicrm_phone.contact_id AND civicrm_phone.is_primary = 1
-			WHERE {$clause}
-			{$groupClause}
-			AND civicrm_contact.is_deleted = 0 AND civicrm_contact.is_deceased = 0 
-			ORDER BY civicrm_contact.display_name, civicrm_email.email
-			");
-		if ($sql_arr = $db->fetch_assoc()) {
-			$count = $sql_arr['total'];
-		}
-		return new rcube_result_set($count, ($this->list_page-1) * $this->page_size);
-	}
-
-    /**
-     * Return the last result set
-     *
-     * @return rcube_result_set Current result set or NULL if nothing selected yet
-     */
-    function get_result() {
-		return $this->result;
-	}
-
-    /**
-     * Get a specific contact record
-     *
-     * @param mixed   Record identifier(s)
-     * @param boolean True to return record as associative array, otherwise a result set is returned
-     *
-     * @return rcube_result_set|array Result object with all record fields
-     */
-    function get_record($id, $assoc=false) {
-	    $this->result = new rcube_result_set(0);
-    	$record = false;
-		$db = $this->getDb();
-		$db->query("
-			SELECT civicrm_contact.id as id, civicrm_contact.display_name, civicrm_email.email, civicrm_phone.phone
-			FROM civicrm_contact 
-			INNER JOIN civicrm_email ON civicrm_contact.id = civicrm_email.contact_id AND civicrm_email.is_primary = 1
-			LEFT JOIN civicrm_phone ON civicrm_contact.id = civicrm_phone.contact_id AND civicrm_phone.is_primary = 1
-			WHERE civicrm_contact.is_deleted = 0 AND civicrm_contact.is_deceased = 0 AND civicrm_contact.id=? ", $id);
-		if ($sql_arr = $db->fetch_assoc()) {
-			$this->result = new rcube_result_set(0);		
-			$record = array(
-				'ID' => $sql_arr['id'],
-				'name' => $sql_arr['display_name'],
-				'email' => $sql_arr['email'],
-				'phone' => $sql_arr['phone'],
-			);
-				$this->result->add($record);
-		}
-		return $assoc && $record ? $record : $this->result;
-	}
-
-	/**
-     * Setter for the current group
-     * (empty, has to be re-implemented by extending class)
-     */
-    function set_group($gid) { 
-		$this->gid = $gid;
-	}
-
-    /**
-     * List all active contact groups of this source
-     *
-     * @param string  Optional search string to match group name
-     * @param int     Search mode. Sum of self::SEARCH_*
-     *
-     * @return array  Indexed list of contact groups, each a hash array
-     */
-    function list_groups($search = null, $mode = 0)
+    public function reset(): void
     {
-		$groups = array();
-        $db = $this->getDb();
-		$clause = "";
-		if ($search) {
-			$clause = " AND " . $db->ilike('title', $search . '%');
-		}
-
-		$db->query("SELECT * FROM civicrm_group WHERE is_active = 1 and is_hidden = 0 {$clause} ORDER BY title");
-		
-		while ($sql_arr = $db->fetch_assoc()) {
-			$record = array(
-				'ID' => $sql_arr['id'],
-				'name' => $sql_arr['title']
-			);
-			$groups[] = $record;
-		}
-        return $groups;
+        $this->filter = null;
+        $this->result = null;
     }
 
-    /**
-     * Get group properties such as name and email address(es)
-     *
-     * @param string Group identifier
-     * @return array Group properties as hash array
-     */
-    function get_group($group_id)
+    public function search($fields, $value, $mode = 0, $select = true, $nocount = false, $required = [])
     {
-		$groups = array();
-        $db = $this->getDb();
-		$db->query("
-			SELECT civicrm_contact.id as id, civicrm_contact.display_name, civicrm_email.email, civicrm_phone.phone
-			FROM civicrm_contact 
-			INNER JOIN civicrm_email ON civicrm_contact.id = civicrm_email.contact_id AND civicrm_email.is_primary = 1
-			INNER JOIN civicrm_group_contact ON civicrm_group_contact.contact_id = civicrm_contact.id
-			INNER JOIN civicrm_group ON civicrm_group.id = civicrm_group_contact.group_id
-			LEFT JOIN civicrm_phone ON civicrm_contact.id = civicrm_phone.contact_id AND civicrm_phone.is_primary = 1
-			WHERE civicrm_group.is_active = 1 
-			AND civicrm_group_contact.status = 'Added'
-			AND civicrm_group.id=? 
-			ORDER BY title", $group_id);
-		while ($sql_arr = $db->fetch_assoc()) {
-			$record = array(
-				'ID' => $sql_arr['id'],
-				'name' => $sql_arr['display_name'],
-				'email' => $sql_arr['email'],
-				'phone' => $sql_arr['phone'],
-			);
-			$groups[$group_id][] = $record;
-		}
-        return $groups;
+        $this->reset();
+        if ($fields === 'ID' || $fields === ['ID']) {
+            $ids = is_array($value) ? $value : explode(',', (string) $value);
+            $ids = array_values(array_filter($ids, static fn($id) => ctype_digit((string) $id)));
+            if ($ids) {
+                $this->filter = ['id', 'IN', $ids];
+            }
+        } else {
+            $map = ['name' => 'display_name', 'firstname' => 'first_name', 'surname' => 'last_name', 'email' => 'email_primary.email'];
+            $conditions = [];
+            foreach ((array) $fields as $i => $field) {
+                $term = trim((string) (is_array($value) ? ($value[$i] ?? '') : $value));
+                if (mb_strlen($term) < 3) {
+                    continue;
+                }
+                $strict = ($mode & self::SEARCH_STRICT) !== 0;
+                $pattern = addcslashes($term, '\\\\%_') . '%';
+                if (!$strict && !($mode & self::SEARCH_PREFIX)) {
+                    $pattern = '%' . $pattern;
+                }
+                $columns = $field === '*' ? $map : array_intersect_key($map, [$field => true]);
+                foreach ($columns as $column) {
+                    $conditions[] = [$column, $strict ? '=' : 'LIKE', $strict ? $term : $pattern];
+                }
+            }
+            if ($conditions) {
+                $this->filter = [is_array($value) ? 'AND' : 'OR', $conditions];
+            }
+        }
+        return $select ? $this->list_records(null, 0, $nocount) : $this->count();
     }
 
-	/**
-     * Get group assignments of a specific contact record
-     *
-     * @param mixed Record identifier
-     *
-     * @return array List of assigned groups as ID=>Name pairs
-     * @since 0.5-beta
-     */
-    function get_record_groups($id)
+    public function list_records($cols = null, $subset = 0, $nocount = false)
     {
-		$groups = array();
-        $db = $this->getDb();
-		$db->query("
-			SELECT civicrm_group.title, civicrm_group.id 
-			FROM civicrm_group_contact
-			INNER JOIN civicrm_group ON civicrm_group.id = civicrm_group_contact.group_id
-			WHERE civicrm_group.is_active = 1 
-			AND civicrm_group_contact.status = 'Added'
-			AND civicrm_group_contact.contact_id=? 
-			ORDER BY title", $id);
-		while ($sql_arr = $db->fetch_assoc()) {
-			$groups[$sql_arr['id']] = $sql_arr['title'];
-		}
-        return $groups;
+        $size = max(1, (int) $this->page_size);
+        $offset = max(0, $this->list_page - 1) * $size;
+        $limit = $subset ? min(abs($subset), $size) : $size;
+        if ($subset < 0) {
+            $available = max(0, min($size, $this->count()->count - $offset));
+            $offset += max(0, $available - $limit);
+        }
+        return $this->result = $this->query($this->filter, $offset, $limit, false, !$nocount);
     }
 
-	private function getDb() {
-		$rcmail = rcmail::get_instance();
-		$dsn = $rcmail->config->get('civicrm_db_dsn');
-        $db = rcube_db::factory($dsn, '', false);
-		return $db;
-	}
+    public function count()
+    {
+        return $this->result = $this->query($this->filter, 0, 1, true, true);
+    }
 
+    public function get_record($id, $assoc = false)
+    {
+        $filter = ctype_digit((string) $id) ? ['id', '=', (int) $id] : null;
+        $this->result = $this->query($filter, 0, 1, false, false);
+        return $assoc ? $this->result->first() : $this->result;
+    }
+
+    private function query($filter, $offset, $limit, $countOnly, $includeCount)
+    {
+        $result = new rcube_result_set(0, $offset);
+        if (!$filter) {
+            return $result;
+        }
+        $select = $countOnly ? [] : ['id', 'display_name', 'email_primary.email', 'phone_primary.phone'];
+        if ($includeCount) {
+            $select[] = 'row_count';
+        }
+        $params = [
+            'select' => $select,
+            'where' => [['is_deleted', '=', false], ['is_deceased', '=', false],
+                ['email_primary.email', 'IS NOT EMPTY'], $filter],
+            'orderBy' => ['display_name' => 'ASC', 'id' => 'ASC'],
+            'offset' => $offset, 'limit' => $limit,
+        ];
+        try {
+            $config = rcmail::get_instance()->config;
+            $url = rtrim($config->get('civicrm_api4_url'), '/') . '/Contact/get';
+            $client = new \GuzzleHttp\Client(['timeout' => 5, 'connect_timeout' => 2, 'allow_redirects' => false]);
+            if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
+                throw new \RuntimeException('HTTPS required');
+            }
+            $response = $client->post($url, [
+                'headers' => ['X-Requested-With' => 'XMLHttpRequest', 'X-Civi-Auth' => 'Bearer ' . $config->get('civicrm_api4_key')],
+                'form_params' => ['params' => json_encode($params, JSON_THROW_ON_ERROR)],
+            ]);
+            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+            if (isset($data['error_message']) || !is_array($data['values'] ?? null)) {
+                throw new \UnexpectedValueException('Invalid CiviCRM response');
+            }
+            $result->count = (int) ($data['countMatched'] ?? $data['count'] ?? count($data['values']));
+            foreach ($data['values'] as $contact) {
+                $result->add(['ID' => $contact['id'], 'name' => $contact['display_name'],
+                    'email' => $contact['email_primary.email'], 'phone' => $contact['phone_primary.phone'] ?? '']);
+            }
+        } catch (\Exception $e) {
+            $this->set_error(self::ERROR_NO_CONNECTION, 'CiviCRM contact lookup failed.');
+        }
+        return $result;
+    }
 }
-
-?>

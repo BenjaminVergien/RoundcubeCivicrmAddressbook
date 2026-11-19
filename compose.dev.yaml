@@ -1,0 +1,10 @@
+services:
+  roundcube:
+    environment:
+      ROUNDCUBEMAIL_PLUGINS: archive,zipdownload,civicrm_addressbook
+      CIVICRM_API4_URL: ${CIVICRM_API4_URL:-}
+      CIVICRM_API4_KEY: ${CIVICRM_API4_KEY:-}
+    volumes:
+      - ./civicrm_addressbook/civicrm_addressbook.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook.php:ro
+      - ./civicrm_addressbook/civicrm_addressbook_instance.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook_instance.php:ro
+      - ./civicrm_addressbook/config.inc.php.dist:/var/www/html/plugins/civicrm_addressbook/config.inc.php:ro

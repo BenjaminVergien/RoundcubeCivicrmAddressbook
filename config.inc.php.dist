@@ -1,0 +1,3 @@
+<?php
+$config['civicrm_api4_url'] = getenv('CIVICRM_API4_URL') ?: '';
+$config['civicrm_api4_key'] = getenv('CIVICRM_API4_KEY') ?: '';

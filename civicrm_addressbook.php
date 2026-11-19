@@ -1,40 +1,42 @@
 <?php
 
-//ini_set('display_errors', 1);
-require_once(__DIR__ . '/civicrm_addressbook_instance.php');
+require_once __DIR__ . '/civicrm_addressbook_instance.php';
 
-class civicrm_addressbook extends rcube_plugin {
+class civicrm_addressbook extends rcube_plugin
+{
+    public $task = 'mail|addressbook';
 
-	public $task = 'mail|addressbook';
+    public function init()
+    {
+        $this->load_config();
+        $config = rcmail::get_instance()->config;
+        if (!$config->get('civicrm_api4_url') || !$config->get('civicrm_api4_key')) {
+            return;
+        }
 
-	public function init() {
-		$this->add_hook('addressbooks_list',   array($this, 'addressbooks_list'));
-		$this->add_hook('addressbook_get', array($this, 'addressbook_get'));
+        $this->add_hook('addressbooks_list', [$this, 'addressbooks_list']);
+        $this->add_hook('addressbook_get', [$this, 'addressbook_get']);
+        $sources = (array) $config->get('autocomplete_addressbooks', ['sql']);
+        if (!in_array('civicrm', $sources, true)) {
+            $sources[] = 'civicrm';
+            $config->set('autocomplete_addressbooks', $sources);
+        }
+    }
 
-		$rcmail = rcmail::get_instance();
-		$config = $rcmail->config;
-	    $sources= (array) $config->get('autocomplete_addressbooks', array());
-		$sources[] = 'civicrm';
-		$config->set('autocomplete_addressbooks', $sources);
-	}
-	
-	public function addressbook_get($addressbook) {
-		if ($addressbook['id'] == 'civicrm') {
-			$addressbook['instance'] = new civicrm_addressbook_instance();
-	}
-		return $addressbook;
-	}
+    public function addressbook_get($args)
+    {
+        if ($args['id'] === 'civicrm') {
+            $args['instance'] = new civicrm_addressbook_instance();
+        }
+        return $args;
+    }
 
-	public function addressbooks_list($addressbooks) {
-		$addressbooks['sources']['civicrm'] = array(
-			'id' => 'civicrm',
-			'name' => 'CiviCRM',
-			'readonly' => true,
-			'groups' => true,
-		); 
-		return $addressbooks;
-	}
-
+    public function addressbooks_list($args)
+    {
+        $args['sources']['civicrm'] = [
+            'id' => 'civicrm', 'name' => 'CiviCRM', 'readonly' => true,
+            'groups' => false, 'searchonly' => true,
+        ];
+        return $args;
+    }
 }
-
-?>
