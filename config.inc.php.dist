@@ -3,3 +3,7 @@ $config['civicrm_api4_url'] = getenv('CIVICRM_API4_URL') ?: '';
 $config['civicrm_api4_key'] = getenv('CIVICRM_API4_KEY') ?: '';
 $config['civicrm_site_key'] = getenv('CIVICRM_SITE_KEY') ?: '';
 $config['civicrm_log_searches'] = true;
+// Set to false for address-book-only installations.
+$filing = getenv('CIVICRM_FILING_ENABLED');
+$config['civicrm_filing_enabled'] = $filing === false || filter_var($filing, FILTER_VALIDATE_BOOLEAN);
+$config['civicrm_filing_dir'] = getenv('CIVICRM_FILING_DIR') ?: null;

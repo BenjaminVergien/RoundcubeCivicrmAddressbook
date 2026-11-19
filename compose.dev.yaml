@@ -5,7 +5,11 @@ services:
       CIVICRM_API4_URL: ${CIVICRM_API4_URL:-}
       CIVICRM_API4_KEY: ${CIVICRM_API4_KEY:-}
       CIVICRM_SITE_KEY: ${CIVICRM_SITE_KEY:-}
+      CIVICRM_FILING_ENABLED: "${CIVICRM_FILING_ENABLED:-true}"
+      CIVICRM_FILING_DIR: /var/roundcube/db/civicrm-filings
     volumes:
       - ./civicrm_addressbook/civicrm_addressbook.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook.php:ro
       - ./civicrm_addressbook/civicrm_addressbook_instance.php:/var/www/html/plugins/civicrm_addressbook/civicrm_addressbook_instance.php:ro
       - ./civicrm_addressbook/config.inc.php.dist:/var/www/html/plugins/civicrm_addressbook/config.inc.php:ro
+      - ./civicrm_addressbook/filing:/var/www/html/plugins/civicrm_addressbook/filing:ro
+      - ./civicrm_addressbook/localization:/var/www/html/plugins/civicrm_addressbook/localization:ro

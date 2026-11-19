@@ -1,0 +1,31 @@
+<?php
+
+$labels['filedmark'] = 'In CiviCRM abgelegt';
+
+$labels['filemail'] = 'In CRM ablegen';
+$labels['activitylink'] = 'Zur Aktivität';
+$labels['filebutton'] = 'Ablegen';
+$labels['scope'] = 'Betreff, Datum, Absender, An, Cc und Nachrichtentext werden als E-Mail-Aktivität gespeichert. Anhänge sind ausgenommen.';
+$labels['searchcontact'] = 'Kontakt suchen';
+$labels['matches'] = 'Gefundene Kontakte';
+$labels['minchars'] = 'Mindestens drei Zeichen eingeben.';
+$labels['searching'] = 'Suche läuft …';
+$labels['choosecontact'] = 'Bitte den gewünschten Kontakt auswählen.';
+$labels['nomatches'] = 'Keine passenden Kontakte gefunden.';
+$labels['saving'] = 'E-Mail wird abgelegt …';
+$labels['alreadyfiled'] = 'Bereits abgelegt als Aktivität';
+$labels['filed'] = 'Gespeichert als Aktivität';
+$labels['invalidrequest'] = 'Anfrage ungültig. Bitte Roundcube neu laden.';
+$labels['lookupfailed'] = 'Kontakt konnte nicht aus CiviCRM geladen werden.';
+$labels['missingmail'] = 'Nachricht im Postfach nicht gefunden.';
+$labels['filingfailed'] = 'Die Aktivität konnte nicht gespeichert werden. Bitte das CiviCRM-Protokoll prüfen.';
+$labels['uncertain'] = 'Ablage unbestätigt. Bitte die Aktivitäten des Kontakts prüfen. Eine zweite Übertragung ist gesperrt.';
+$labels['journalfailed'] = 'Lokaler Ablagestatus konnte nicht gespeichert werden. Bitte die Administration kontaktieren.';
+$labels['denied'] = 'CiviCRM verweigert das Anlegen der Aktivität. Bitte API-Berechtigungen prüfen.';
+$labels['requestfailed'] = 'Roundcube-Anfrage fehlgeschlagen. Bitte die Verbindung prüfen.';
+$labels['nosubject'] = '(ohne Betreff)';
+$labels['headerfrom'] = 'Von';
+$labels['headerto'] = 'An';
+$labels['headercc'] = 'Cc';
+$labels['headerdate'] = 'Datum';
+$labels['openactivity'] = 'CiviCRM-Aktivität öffnen';

@@ -17,9 +17,36 @@ class civicrm_addressbook extends rcube_plugin
         $this->add_hook('addressbooks_list', [$this, 'addressbooks_list']);
         $this->add_hook('addressbook_get', [$this, 'addressbook_get']);
         $app = rcmail::get_instance();
+        $filingEnabled = $app->task === 'mail' && $config->get('civicrm_filing_enabled', true)
+            && is_file(__DIR__ . '/filing/actions.php');
+        $filingView = $filingEnabled && $app->output instanceof rcmail_output_html
+            && in_array($app->action, ['', 'list', 'show'], true);
+        if ($filingEnabled) {
+            require_once __DIR__ . '/filing/actions.php';
+            $filing = new civicrm_filing($this);
+            $this->add_hook('storage_init', [$filing, 'request_message_id']);
+            $this->add_hook('messages_list', [$filing, 'mark_list']);
+            if ($app->action === 'show' || $app->action === 'preview') {
+                $this->add_hook('message_load', [$filing, 'mark_open']);
+            }
+            if ($filingView || $app->action === 'plugin.civicrm-file') {
+                $this->add_texts('localization', $filingView);
+                $this->register_action('plugin.civicrm-file', [$filing, 'handle']);
+            }
+            if ($filingView) {
+                $app->output->set_env('civicrm_logo', 'data:image/svg+xml;base64,' . base64_encode(file_get_contents(__DIR__ . '/filing/civicrm.svg')));
+                $this->add_button([
+                    'type' => 'link', 'command' => 'plugin.civicrm-file',
+                    'label' => 'filemail', 'domain' => $this->ID,
+                    'class' => 'button archive disabled', 'classact' => 'button archive',
+                    'innerclass' => 'inner',
+                ], 'toolbar');
+                $app->output->add_script(file_get_contents(__DIR__ . '/filing/dialog.js'), 'head');
+            }
+        }
         $compose = $app->task === 'mail' && $app->action === 'compose' && $app->output instanceof rcmail_output_html;
-        if ($compose) {
-            $route = 'contact/view';
+        if ($compose || $filingView) {
+            $route = $compose ? 'contact/view' : 'activity/view';
             $uri = new \GuzzleHttp\Psr7\Uri($config->get('civicrm_api4_url'));
             parse_str($uri->getQuery(), $query);
             $path = $uri->getPath();
@@ -33,7 +60,7 @@ class civicrm_addressbook extends rcube_plugin
                     ->withQuery('reset=1');
             }
             if ($publicUri->getScheme() === 'https' && $publicUri->getQuery() !== '') {
-                $app->output->set_env('civicrm_contact_url', (string) $publicUri);
+                $app->output->set_env($compose ? 'civicrm_contact_url' : 'civicrm_activity_url', (string) $publicUri);
             }
         }
         if ($compose) {
