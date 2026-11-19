@@ -45,13 +45,34 @@ class civicrm_addressbook_instance extends rcube_addressbook
                     $pattern = '%' . $pattern;
                 }
                 $columns = $field === '*' ? $map : array_intersect_key($map, [$field => true]);
+                $alternatives = [];
                 foreach ($columns as $column) {
-                    $conditions[] = [$column, $strict ? '=' : 'LIKE', $strict ? $term : $pattern];
+                    $alternatives[] = [$column, $strict ? '=' : 'LIKE', $strict ? $term : $pattern];
+                }
+                if (isset($columns['name']) && !$strict) {
+                    // CiviCRM display names can start with a salutation. Match each
+                    // typed word against the underlying names in either order.
+                    $name = preg_replace('/^(?:Frau|Herr)\s+/iu', '', $term);
+                    $words = preg_split('/[\s,]+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+                    if ($words && mb_strlen(implode('', $words)) >= 3) {
+                        $parts = [];
+                        foreach ($words as $word) {
+                            $prefix = addcslashes($word, '\\\\%_') . '%';
+                            $parts[] = ['OR', [['first_name', 'LIKE', $prefix], ['last_name', 'LIKE', $prefix]]];
+                        }
+                        $alternatives[] = ['AND', $parts];
+                    }
+                }
+                if ($alternatives) {
+                    $conditions[] = count($alternatives) === 1 ? $alternatives[0] : ['OR', $alternatives];
                 }
             }
             if ($conditions) {
                 $this->filter = [is_array($value) ? 'AND' : 'OR', $conditions];
             }
+        }
+        if (!$this->filter && rcmail::get_instance()->config->get('civicrm_log_searches', false)) {
+            error_log('[civicrm_addressbook] search skipped: no eligible field or search term');
         }
         return $select ? $this->list_records(null, 0, $nocount) : $this->count();
     }
@@ -86,6 +107,9 @@ class civicrm_addressbook_instance extends rcube_addressbook
         if (!$filter) {
             return $result;
         }
+        $status = 0;
+        $stage = 'configuration';
+        $diagnostic = '';
         $select = $countOnly ? [] : ['id', 'display_name', 'email_primary.email', 'phone_primary.phone'];
         if ($includeCount) {
             $select[] = 'row_count';
@@ -99,17 +123,36 @@ class civicrm_addressbook_instance extends rcube_addressbook
         ];
         try {
             $config = rcmail::get_instance()->config;
-            $url = rtrim($config->get('civicrm_api4_url'), '/') . '/Contact/get';
-            $client = new \GuzzleHttp\Client(['timeout' => 5, 'connect_timeout' => 2, 'allow_redirects' => false]);
-            if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
-                throw new \RuntimeException('HTTPS required');
+            $stage = 'transport';
+            $response = civicrm_api4_http::post('Contact/get', $params);
+            $status = $response->getStatusCode();
+            $stage = 'http';
+            if ($status >= 300 && $status < 400) {
+                $path = parse_url($response->getHeaderLine('Location'), PHP_URL_PATH);
+                $stage = basename((string) $path) === 'wp-login.php' ? 'wordpress-login-redirect' : 'redirect';
             }
-            $response = $client->post($url, [
-                'headers' => ['X-Requested-With' => 'XMLHttpRequest', 'X-Civi-Auth' => 'Bearer ' . $config->get('civicrm_api4_key')],
-                'form_params' => ['params' => json_encode($params, JSON_THROW_ON_ERROR)],
-            ]);
-            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-            if (isset($data['error_message']) || !is_array($data['values'] ?? null)) {
+            $body = (string) $response->getBody();
+            $data = json_decode($body, true);
+            if ($status !== 200 || !is_array($data) || isset($data['error_message'])) {
+                $format = is_array($data) ? 'json' : (str_starts_with(ltrim($body), '<') ? 'markup' : 'other');
+                $diagnostic = ' body=' . $format;
+                $id = $data['error_id'] ?? null;
+                $message = $data['error_message'] ?? null;
+                if (!$id && is_string($message) && preg_match('/Error ID:\s*([a-z0-9_-]+)/i', $message, $match)) {
+                    $id = $match[1];
+                }
+                if (is_string($id) && preg_match('/^[a-z0-9_-]{1,80}$/iD', $id)) {
+                    $diagnostic .= ' error_id=' . $id;
+                }
+                if (is_string($message)) {
+                    $stage = 'civicrm-error';
+                } elseif ($status === 200) {
+                    $stage = 'decode-json';
+                }
+                throw new \UnexpectedValueException();
+            }
+            $stage = 'api-response';
+            if (!is_array($data['values'] ?? null)) {
                 throw new \UnexpectedValueException('Invalid CiviCRM response');
             }
             $result->count = (int) ($data['countMatched'] ?? $data['count'] ?? count($data['values']));
@@ -117,9 +160,47 @@ class civicrm_addressbook_instance extends rcube_addressbook
                 $result->add(['ID' => $contact['id'], 'name' => $contact['display_name'],
                     'email' => $contact['email_primary.email'], 'phone' => $contact['phone_primary.phone'] ?? '']);
             }
+            if ($config->get('civicrm_log_searches', false)) {
+                error_log(sprintf('[civicrm_addressbook] Contact.get HTTP %d ok rows=%d count=%d offset=%d', $status, count($data['values']), $result->count, $offset));
+            }
         } catch (\Exception $e) {
+            // Exception messages and response bodies may contain contacts or credentials.
+            $detail = get_class($e);
+            if ($e instanceof \GuzzleHttp\Exception\ConnectException) {
+                $context = $e->getHandlerContext();
+                $detail .= ' curl_errno=' . (int) ($context['errno'] ?? 0);
+                foreach (['namelookup_time', 'connect_time', 'pretransfer_time', 'starttransfer_time', 'total_time'] as $metric) {
+                    if (isset($context[$metric])) {
+                        $detail .= sprintf(' %s_ms=%d', $metric, round($context[$metric] * 1000));
+                    }
+                }
+            }
+            error_log(sprintf('[civicrm_addressbook] Contact.get failed stage=%s http=%d%s %s', $stage, $status, $diagnostic, $detail));
             $this->set_error(self::ERROR_NO_CONNECTION, 'CiviCRM contact lookup failed.');
         }
         return $result;
+    }
+}
+
+class civicrm_api4_http
+{
+    public static function post(string $route, array $params)
+    {
+        $config = rcmail::get_instance()->config;
+        $url = rtrim($config->get('civicrm_api4_url'), '/') . '/' . $route;
+        $client = new \GuzzleHttp\Client(['timeout' => 12, 'connect_timeout' => 4, 'allow_redirects' => false]);
+        if (parse_url($url, PHP_URL_SCHEME) !== 'https') {
+            throw new \RuntimeException('HTTPS required');
+        }
+        $headers = ['X-Requested-With' => 'XMLHttpRequest', 'X-Civi-Auth' => 'Bearer ' . $config->get('civicrm_api4_key')];
+        if ($siteKey = $config->get('civicrm_site_key')) {
+            $headers['X-Civi-Key'] = $siteKey;
+        }
+
+        return $client->post($url, [
+            'http_errors' => false,
+            'headers' => $headers,
+            'form_params' => ['params' => json_encode($params, JSON_THROW_ON_ERROR)],
+        ]);
     }
 }
