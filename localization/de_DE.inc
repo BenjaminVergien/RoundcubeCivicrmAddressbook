@@ -31,6 +31,7 @@ $labels['headercc'] = 'Cc';
 $labels['headerdate'] = 'Datum';
 $labels['mailtoolarge'] = 'Diese Nachricht überschreitet das Ablagelimit von %d MiB (einschließlich Anhängen).';
 $labels['sizeunknown'] = 'Die Nachrichtengröße konnte nicht ermittelt werden. Ablage abgebrochen.';
+$labels['attachmentreadfailed'] = 'Nicht alle Anhänge dieser Nachricht konnten gelesen werden. Es wurde keine Aktivität erstellt.';
 $labels['openactivity'] = 'CiviCRM-Aktivität öffnen';
 $labels['done'] = 'Fertig';
 $labels['attachmentconfirmed'] = '%s – in CiviCRM abgelegt.';

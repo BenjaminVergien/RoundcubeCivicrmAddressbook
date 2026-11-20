@@ -31,6 +31,7 @@ $labels['headercc'] = 'Cc';
 $labels['headerdate'] = 'Date';
 $labels['mailtoolarge'] = 'This message exceeds the filing limit of %d MiB (including attachments).';
 $labels['sizeunknown'] = 'Could not determine the message size. Filing stopped.';
+$labels['attachmentreadfailed'] = 'Could not read every attachment from this message. No activity was created.';
 $labels['openactivity'] = 'Open CiviCRM activity';
 $labels['done'] = 'Done';
 $labels['attachmentconfirmed'] = '%s – filed in CiviCRM.';
