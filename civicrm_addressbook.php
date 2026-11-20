@@ -17,7 +17,8 @@ class civicrm_addressbook extends rcube_plugin
         $this->add_hook('addressbooks_list', [$this, 'addressbooks_list']);
         $this->add_hook('addressbook_get', [$this, 'addressbook_get']);
         $app = rcmail::get_instance();
-        $filingEnabled = $app->task === 'mail' && $config->get('civicrm_filing_enabled', true)
+        $filingEnabled = $app->task === 'mail'
+            && $config->get('civicrm_filing_enabled', (bool) $config->get('civicrm_filing_dir'))
             && is_file(__DIR__ . '/filing/actions.php');
         $filingView = $filingEnabled && $app->output instanceof rcmail_output_html
             && in_array($app->action, ['', 'list', 'show'], true);
