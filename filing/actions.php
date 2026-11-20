@@ -3,6 +3,9 @@
 class civicrm_filing
 {
     private const MAX_JOURNAL_BYTES = 512;
+    // Leave headroom for the later JSON and form-encoded representations.
+    private const MAX_ACTIVITY_SUBJECT_BYTES = 4096;
+    private const MAX_ACTIVITY_DETAILS_BYTES = 4 * 1048576;
 
     public function __construct(private rcube_plugin $plugin) {}
 
@@ -433,6 +436,57 @@ class civicrm_filing
         }
     }
 
+    private function html_size_bound(string $text): int
+    {
+        $bytes = strlen($text);
+        if (preg_match('//u', $text) !== 1) {
+            // ENT_SUBSTITUTE can replace each invalid input byte with a three-byte character.
+            $bytes *= 3;
+        }
+        $bytes += 4 * substr_count($text, '&');
+        $bytes += 5 * (substr_count($text, '"') + substr_count($text, "'"));
+        $bytes += 3 * (substr_count($text, '<') + substr_count($text, '>'));
+        // nl2br() adds six bytes per line break; counting CR and LF separately safely
+        // overestimates paired line endings.
+        $bytes += 6 * (substr_count($text, "\r") + substr_count($text, "\n"));
+        return $bytes;
+    }
+
+    private function activity_details(array $lines, string $body): string
+    {
+        $sourceBytes = strlen($body) + 2;
+        foreach ($lines as $index => $line) {
+            $sourceBytes += strlen($line) + ($index > 0 ? 1 : 0);
+            if ($sourceBytes > self::MAX_ACTIVITY_DETAILS_BYTES) {
+                throw new DomainException('activitytoolarge');
+            }
+        }
+        if ($sourceBytes > self::MAX_ACTIVITY_DETAILS_BYTES) {
+            throw new DomainException('activitytoolarge');
+        }
+
+        $bytes = $this->html_size_bound($body) + $this->html_size_bound("\n\n");
+        foreach ($lines as $index => $line) {
+            $bytes += $this->html_size_bound($line);
+            if ($index > 0) {
+                $bytes += $this->html_size_bound("\n");
+            }
+            if ($bytes > self::MAX_ACTIVITY_DETAILS_BYTES) {
+                throw new DomainException('activitytoolarge');
+            }
+        }
+        if ($bytes > self::MAX_ACTIVITY_DETAILS_BYTES) {
+            throw new DomainException('activitytoolarge');
+        }
+
+        $details = nl2br(htmlspecialchars(implode("\n", $lines) . "\n\n" . $body,
+            ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+        if (strlen($details) > self::MAX_ACTIVITY_DETAILS_BYTES) {
+            throw new DomainException('activitytoolarge');
+        }
+        return $details;
+    }
+
     private function file(rcube_message $mail, int $contact, array $parts, array $contents,
         string $mailboxIdentity): array
     {
@@ -444,11 +498,18 @@ class civicrm_filing
             $value = (string) $mail->get_header($field);
             $headers[$field] = $value;
             if ($value !== '') {
-                $lines[] = $this->plugin->gettext('header' . $field) . ': ' . $value;
+                $label = $this->plugin->gettext('header' . $field);
+                if (strlen($label) + 2 + strlen($value) > self::MAX_ACTIVITY_DETAILS_BYTES) {
+                    throw new DomainException('activitytoolarge');
+                }
+                $lines[] = $label . ': ' . $value;
             }
         }
-        $details = nl2br(htmlspecialchars(implode("\n", $lines) . "\n\n" . $body, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+        $details = $this->activity_details($lines, $body);
         $subject = (string) ($mail->subject ?: '');
+        if (strlen($subject) > self::MAX_ACTIVITY_SUBJECT_BYTES) {
+            throw new DomainException('activitytoolarge');
+        }
         $values = [
             'activity_type_id:name' => 'Email', 'status_id:name' => 'Completed',
             'source_contact_id' => 'user_contact_id', 'target_contact_id' => [$contact],
