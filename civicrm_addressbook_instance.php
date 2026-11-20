@@ -2,6 +2,11 @@
 
 class civicrm_addressbook_instance extends rcube_addressbook
 {
+    private const SEARCH_MAX_BYTES = 256;
+    private const SEARCH_MAX_CHARS = 128;
+    private const SEARCH_MAX_WORDS = 10;
+    private const SEARCH_MAX_PREDICATES = 24;
+
     public $primary_key = 'ID';
     public $readonly = true;
     public $ready = true;
@@ -34,8 +39,16 @@ class civicrm_addressbook_instance extends rcube_addressbook
         } else {
             $map = ['name' => 'display_name', 'firstname' => 'first_name', 'surname' => 'last_name', 'email' => 'email_primary.email'];
             $conditions = [];
+            $predicateCount = 0;
             foreach ((array) $fields as $i => $field) {
-                $term = trim((string) (is_array($value) ? ($value[$i] ?? '') : $value));
+                $term = (string) (is_array($value) ? ($value[$i] ?? '') : $value);
+                if (strlen($term) > self::SEARCH_MAX_BYTES) {
+                    return $this->reject_search($select, $nocount);
+                }
+                $term = trim($term);
+                if (!mb_check_encoding($term, 'UTF-8') || mb_strlen($term) > self::SEARCH_MAX_CHARS) {
+                    return $this->reject_search($select, $nocount);
+                }
                 if (mb_strlen($term) < 3) {
                     continue;
                 }
@@ -45,6 +58,10 @@ class civicrm_addressbook_instance extends rcube_addressbook
                     $pattern = '%' . $pattern;
                 }
                 $columns = $field === '*' ? $map : array_intersect_key($map, [$field => true]);
+                $predicateCount += count($columns);
+                if ($predicateCount > self::SEARCH_MAX_PREDICATES) {
+                    return $this->reject_search($select, $nocount);
+                }
                 $alternatives = [];
                 foreach ($columns as $column) {
                     $alternatives[] = [$column, $strict ? '=' : 'LIKE', $strict ? $term : $pattern];
@@ -54,7 +71,14 @@ class civicrm_addressbook_instance extends rcube_addressbook
                     // typed word against the underlying names in either order.
                     $name = preg_replace('/^(?:Frau|Herr)\s+/iu', '', $term);
                     $words = preg_split('/[\s,]+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+                    if ($words === false || count($words) > self::SEARCH_MAX_WORDS) {
+                        return $this->reject_search($select, $nocount);
+                    }
                     if ($words && mb_strlen(implode('', $words)) >= 3) {
+                        $predicateCount += count($words) * 2;
+                        if ($predicateCount > self::SEARCH_MAX_PREDICATES) {
+                            return $this->reject_search($select, $nocount);
+                        }
                         $parts = [];
                         foreach ($words as $word) {
                             $prefix = addcslashes($word, '\\\\%_') . '%';
@@ -73,6 +97,16 @@ class civicrm_addressbook_instance extends rcube_addressbook
         }
         if (!$this->filter && rcmail::get_instance()->config->get('civicrm_log_searches', false)) {
             error_log('[civicrm_addressbook] search skipped: no eligible field or search term');
+        }
+        return $select ? $this->list_records(null, 0, $nocount) : $this->count();
+    }
+
+    private function reject_search($select, $nocount)
+    {
+        $this->filter = null;
+        $this->set_error(self::ERROR_SEARCH, 'CiviCRM contact search is too complex.');
+        if (rcmail::get_instance()->config->get('civicrm_log_searches', false)) {
+            error_log('[civicrm_addressbook] search rejected: complexity limit exceeded');
         }
         return $select ? $this->list_records(null, 0, $nocount) : $this->count();
     }

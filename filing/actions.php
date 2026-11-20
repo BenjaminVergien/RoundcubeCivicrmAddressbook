@@ -112,7 +112,7 @@ class civicrm_filing
             $action = $_POST['op'] ?? '';
             if ($action === 'search') {
                 $book = new civicrm_addressbook_instance();
-                $term = trim((string) ($_POST['term'] ?? ''));
+                $term = (string) ($_POST['term'] ?? '');
                 $book->page_size = 20;
                 $result = $book->search('*', $term, 0, true, true);
                 if ($book->get_error()) {
