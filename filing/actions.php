@@ -6,7 +6,13 @@ class civicrm_filing
 
     private function directory(): string
     {
-        return rcmail::get_instance()->config->get('civicrm_filing_dir') ?: sys_get_temp_dir() . '/roundcube-civicrm-filing';
+        $app = rcmail::get_instance();
+        $account = (int) ($app->user->ID ?? 0);
+        if ($account < 1) {
+            throw new DomainException('invalidrequest');
+        }
+        $root = $app->config->get('civicrm_filing_dir') ?: sys_get_temp_dir() . '/roundcube-civicrm-filing';
+        return $root . '/account-' . $account;
     }
 
     private function marker(string $identity): string
