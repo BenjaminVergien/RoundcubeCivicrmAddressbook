@@ -24,7 +24,6 @@ class civicrm_addressbook extends rcube_plugin
         if ($filingEnabled) {
             require_once __DIR__ . '/filing/actions.php';
             $filing = new civicrm_filing($this);
-            $this->add_hook('storage_init', [$filing, 'request_message_id']);
             $this->add_hook('messages_list', [$filing, 'mark_list']);
             if ($app->action === 'show' || $app->action === 'preview') {
                 $this->add_hook('message_load', [$filing, 'mark_open']);

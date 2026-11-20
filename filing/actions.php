@@ -15,26 +15,25 @@ class civicrm_filing
         return $root . '/account-' . $account;
     }
 
-    private function marker(string $identity): string
+    private function marker(string $mailboxIdentity): string
     {
         $site = rcmail::get_instance()->config->get('civicrm_api4_url');
-        return $this->directory() . '/mail-' . hash('sha256', $site . "\0" . $identity);
+        $key = hash('sha256', serialize(['marker-v2', $site, $mailboxIdentity]));
+        return $this->directory() . '/mail-' . $key;
     }
 
-    public function request_message_id($options)
+    private function mailbox_identity(string $folder, string $uid): string
     {
-        // List views fetch a shorter set of IMAP headers than the open-message view.
-        $options['fetch_headers'] = trim(($options['fetch_headers'] ?? '') . ' MESSAGE-ID');
-        return $options;
+        return hash('sha256', serialize(['mailbox-v1', $folder, $uid]));
     }
 
     public function mark_list($args)
     {
         $marked = [];
         foreach ($args['messages'] as $header) {
-            $identity = trim((string) $header->get('message-id'));
-            if ($identity !== '' && ($status = $this->status($identity))) {
-                $folder = $header->folder ?: rcmail::get_instance()->get_storage()->get_folder();
+            $folder = $header->folder ?: rcmail::get_instance()->get_storage()->get_folder();
+            $identity = $this->mailbox_identity((string) $folder, (string) $header->uid);
+            if ($status = $this->status($identity)) {
                 $marked[$folder][$header->uid] = $status;
             }
         }
@@ -45,17 +44,12 @@ class civicrm_filing
     public function mark_open($args)
     {
         $mail = $args['object'];
-        $identity = trim((string) $mail->get_header('message-id'));
-        if ($identity === '') {
-            $identity = $this->fallback_identity($mail, (string) $mail->first_text_part());
-        }
-        rcmail::get_instance()->output->set_env('civicrm_mail_filed', $this->status($identity));
+        $folder = (string) (($mail->folder ?? '') ?: rcmail::get_instance()->get_storage()->get_folder());
+        $uid = (string) ($mail->uid ?? $mail->headers->uid ?? '');
+        $status = $folder !== '' && ctype_digit($uid)
+            ? $this->status($this->mailbox_identity($folder, $uid)) : false;
+        rcmail::get_instance()->output->set_env('civicrm_mail_filed', $status);
         return $args;
-    }
-
-    private function fallback_identity($mail, string $body): string
-    {
-        return hash('sha256', implode("\0", [$mail->subject, $mail->get_header('from'), $mail->get_header('date'), $body]));
     }
 
     private function status(string $identity): array|bool
@@ -77,9 +71,9 @@ class civicrm_filing
         return !empty($link['id']) && !empty($link['cid']) ? $link : true;
     }
 
-    private function mark_confirmed(string $identity, int $id, int $contact): array|bool
+    private function mark_confirmed(string $mailboxIdentity, int $id, int $contact): array|bool
     {
-        $file = fopen($this->marker($identity), 'c+b');
+        $file = fopen($this->marker($mailboxIdentity), 'c+b');
         try {
             if (!$file || !flock($file, LOCK_EX)) {
                 throw new DomainException('journalfailed');
@@ -160,12 +154,14 @@ class civicrm_filing
                         if (!ctype_digit($id) || !(int) $id || !$book->get_record($id, true)) {
                             throw new DomainException('lookupfailed');
                         }
-                        $reply = $this->file($mail, (int) $id);
+                        $contents = $this->attachment_contents($mail, $parts);
+                        $mailboxIdentity = $this->mailbox_identity($folder, $uid);
+                        $reply = $this->file($mail, (int) $id, $parts, $contents, $mailboxIdentity);
                         $reply['attachments'] = [];
                         foreach (array_unique($selected) as $part) {
                             $label = 'attachmentconfirmed';
                             try {
-                                $this->attach($mail, $reply['id'], $parts[$part]);
+                                $this->attach($reply['id'], $parts[$part], $contents[$part]);
                             } catch (Throwable $e) {
                                 $label = $e instanceof DomainException && in_array($e->getMessage(), ['attachmentfailed', 'attachmentdenied', 'attachmentlimit'], true)
                                     ? $e->getMessage() : 'attachmentuncertain';
@@ -210,10 +206,43 @@ class civicrm_filing
         return $parts;
     }
 
-    private function attach(rcube_message $mail, int $activity, array $part): void
+    private function attachment_contents(rcube_message $mail, array $parts): array
+    {
+        $contents = [];
+        foreach ($parts as $part) {
+            $bytes = $mail->get_part_body($part['id']);
+            if (!is_string($bytes) || ($bytes === '' && $part['size'] > 0)) {
+                throw new DomainException('attachmentreadfailed');
+            }
+            $contents[$part['id']] = $bytes;
+        }
+        return $contents;
+    }
+
+    private function message_identity(string $subject, array $headers, string $body, ?string $activityDate,
+        array $parts, array $contents): string
+    {
+        ksort($parts, SORT_STRING);
+        $attachments = [];
+        foreach ($parts as $part) {
+            $bytes = $contents[$part['id']];
+            $attachments[] = [
+                'id' => $part['id'], 'name' => $part['name'], 'type' => $part['type'],
+                'size' => strlen($bytes), 'sha256' => hash('sha256', $bytes),
+            ];
+        }
+        return hash('sha256', serialize([
+            'message-v1', $subject, $headers, $body, $activityDate, $attachments,
+        ]));
+    }
+
+    private function attach(int $activity, array $part, string $bytes): void
     {
         $site = rcmail::get_instance()->config->get('civicrm_api4_url');
-        $key = hash('sha256', implode("\0", [$site, $activity, $part['id']]));
+        $key = hash('sha256', serialize([
+            'attachment-v2', $site, $activity, $part['id'], $part['name'], $part['type'],
+            strlen($bytes), hash('sha256', $bytes),
+        ]));
         $file = fopen($this->directory() . '/attachment-' . $key, 'c+b');
         if (!$file) {
             throw new DomainException('attachmentfailed');
@@ -228,10 +257,6 @@ class civicrm_filing
             }
             if ($state !== '') {
                 throw new DomainException('attachmentuncertain');
-            }
-            $bytes = $mail->get_part_body($part['id']);
-            if (!is_string($bytes) || ($bytes === '' && $part['size'] > 0)) {
-                throw new DomainException('attachmentfailed');
             }
             $this->record($file, 'pending');
             $response = civicrm_api4_http::attach($activity, $part['name'], $part['type'], $bytes);
@@ -256,37 +281,42 @@ class civicrm_filing
         }
     }
 
-    private function file(rcube_message $mail, int $contact): array
+    private function file(rcube_message $mail, int $contact, array $parts, array $contents,
+        string $mailboxIdentity): array
     {
         $config = rcmail::get_instance()->config;
         $body = (string) $mail->first_text_part();
         $lines = [];
+        $headers = [];
         foreach (['from', 'to', 'cc', 'date'] as $field) {
             $value = (string) $mail->get_header($field);
+            $headers[$field] = $value;
             if ($value !== '') {
                 $lines[] = $this->plugin->gettext('header' . $field) . ': ' . $value;
             }
         }
         $details = nl2br(htmlspecialchars(implode("\n", $lines) . "\n\n" . $body, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+        $subject = (string) ($mail->subject ?: '');
         $values = [
             'activity_type_id:name' => 'Email', 'status_id:name' => 'Completed',
             'source_contact_id' => 'user_contact_id', 'target_contact_id' => [$contact],
-            'subject' => $mail->subject ?: $this->plugin->gettext('nosubject'), 'details' => $details,
+            'subject' => $subject !== '' ? $subject : $this->plugin->gettext('nosubject'), 'details' => $details,
         ];
+        $activityDate = null;
         if ($mail->headers->timestamp) {
-            $values['activity_date_time'] = date('Y-m-d H:i:s', $mail->headers->timestamp);
+            $activityDate = date('Y-m-d H:i:s', $mail->headers->timestamp);
+            $values['activity_date_time'] = $activityDate;
         }
 
         // Reserve before posting: a transport timeout can also occur after a successful create.
-        $identity = trim((string) $mail->get_header('message-id'));
-        if ($identity === '') {
-            $identity = $this->fallback_identity($mail, $body);
-        }
+        $identity = $this->message_identity($subject, $headers, $body, $activityDate, $parts, $contents);
         $dir = $this->directory();
         if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
             throw new DomainException('journalfailed');
         }
-        $key = hash('sha256', implode("\0", [$config->get('civicrm_api4_url'), $contact, $identity]));
+        $key = hash('sha256', serialize([
+            'activity-v2', $config->get('civicrm_api4_url'), $contact, $identity,
+        ]));
         $file = fopen($dir . '/' . $key, 'c+b');
         if (!$file) {
             throw new DomainException('journalfailed');
@@ -297,7 +327,8 @@ class civicrm_filing
             }
             $state = stream_get_contents($file);
             if (ctype_digit($state) && (int) $state > 0) {
-                return ['id' => (int) $state, 'already' => true, 'marker' => $this->mark_confirmed($identity, (int) $state, $contact)];
+                return ['id' => (int) $state, 'already' => true,
+                    'marker' => $this->mark_confirmed($mailboxIdentity, (int) $state, $contact)];
             }
             if ($state !== '') {
                 throw new DomainException('uncertain');
@@ -320,7 +351,7 @@ class civicrm_filing
                 throw new DomainException('uncertain');
             }
             $this->record($file, (string) $id);
-            return ['id' => $id, 'marker' => $this->mark_confirmed($identity, $id, $contact)];
+            return ['id' => $id, 'marker' => $this->mark_confirmed($mailboxIdentity, $id, $contact)];
         } finally {
             fclose($file);
         }
