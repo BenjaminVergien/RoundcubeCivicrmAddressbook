@@ -2,24 +2,171 @@
 
 class civicrm_filing
 {
+    private const MAX_JOURNAL_BYTES = 512;
+
     public function __construct(private rcube_plugin $plugin) {}
 
-    private function directory(): string
+    private function owner(): int
+    {
+        if (!function_exists('posix_geteuid')) {
+            throw new DomainException('journalfailed');
+        }
+        return posix_geteuid();
+    }
+
+    private function directory(bool $create = false): string
     {
         $app = rcmail::get_instance();
         $account = (int) ($app->user->ID ?? 0);
         if ($account < 1) {
             throw new DomainException('invalidrequest');
         }
-        $root = $app->config->get('civicrm_filing_dir') ?: sys_get_temp_dir() . '/roundcube-civicrm-filing';
-        return $root . '/account-' . $account;
+        $root = $this->root_directory($create);
+        $directory = $root . '/account-' . $account;
+        clearstatcache(true, $directory);
+        if (@lstat($directory) === false && $create) {
+            @mkdir($directory, 0700);
+            clearstatcache(true, $directory);
+        }
+        $this->assert_private_directory($directory, $this->owner());
+        return $directory;
+    }
+
+    private function root_directory(bool $create): string
+    {
+        $configured = rcmail::get_instance()->config->get('civicrm_filing_dir');
+        if (!is_string($configured) || $configured === '' || $configured[0] !== '/') {
+            throw new DomainException('journalfailed');
+        }
+        $root = rtrim($configured, '/');
+        if ($root === '') {
+            throw new DomainException('journalfailed');
+        }
+        $owner = $this->owner();
+        $parent = dirname($root);
+        if (realpath($parent) !== $parent) {
+            throw new DomainException('journalfailed');
+        }
+        $this->assert_trusted_ancestors($parent, $owner);
+        clearstatcache(true, $root);
+        if (@lstat($root) === false && $create) {
+            @mkdir($root, 0700);
+            clearstatcache(true, $root);
+        }
+        if (realpath($root) !== $root) {
+            throw new DomainException('journalfailed');
+        }
+        $this->assert_private_directory($root, $owner);
+        return $root;
+    }
+
+    private function assert_trusted_ancestors(string $directory, int $owner): void
+    {
+        while (true) {
+            clearstatcache(true, $directory);
+            $stat = @lstat($directory);
+            if ($stat === false || ($stat['mode'] & 0170000) !== 0040000
+                || !in_array($stat['uid'], [0, $owner], true) || ($stat['mode'] & 0022) !== 0) {
+                throw new DomainException('journalfailed');
+            }
+            if ($directory === '/') {
+                return;
+            }
+            $directory = dirname($directory);
+        }
+    }
+
+    private function assert_private_directory(string $directory, int $owner): void
+    {
+        clearstatcache(true, $directory);
+        $stat = @lstat($directory);
+        if ($stat === false || ($stat['mode'] & 0170000) !== 0040000
+            || $stat['uid'] !== $owner || ($stat['mode'] & 0777) !== 0700) {
+            throw new DomainException('journalfailed');
+        }
     }
 
     private function marker(string $mailboxIdentity): string
     {
         $site = rcmail::get_instance()->config->get('civicrm_api4_url');
         $key = hash('sha256', serialize(['marker-v2', $site, $mailboxIdentity]));
-        return $this->directory() . '/mail-' . $key;
+        return 'mail-' . $key;
+    }
+
+    private function open_journal(string $name, bool $create, bool $write, string $error)
+    {
+        if (!preg_match('/\A(?:mail-|attachment-)?[a-f0-9]{64}\z/D', $name)) {
+            throw new DomainException($error);
+        }
+        $path = $this->directory() . '/' . $name;
+        clearstatcache(true, $path);
+        $before = @lstat($path);
+        $created = false;
+        if ($before === false) {
+            if (!$create) {
+                return false;
+            }
+            $file = @fopen($path, 'x+b');
+            if ($file) {
+                $created = true;
+            } else {
+                clearstatcache(true, $path);
+                $before = @lstat($path);
+            }
+        }
+        if (!$created) {
+            if (!$this->valid_journal_stat($before, $this->owner(), false)) {
+                throw new DomainException($error);
+            }
+            if (($before['mode'] & 0777) !== 0600) {
+                if (!@chmod($path, 0600)) {
+                    throw new DomainException($error);
+                }
+                clearstatcache(true, $path);
+                $before = @lstat($path);
+                if (!$this->valid_journal_stat($before, $this->owner(), true)) {
+                    throw new DomainException($error);
+                }
+            }
+            $file = @fopen($path, $write ? 'r+b' : 'rb');
+        } elseif (!@chmod($path, 0600)) {
+            fclose($file);
+            throw new DomainException($error);
+        }
+        if (!$file) {
+            throw new DomainException($error);
+        }
+        $opened = fstat($file);
+        clearstatcache(true, $path);
+        $current = @lstat($path);
+        if (!$this->valid_journal_stat($opened, $this->owner(), true)
+            || !$this->valid_journal_stat($current, $this->owner(), true)
+            || $opened['dev'] !== $current['dev'] || $opened['ino'] !== $current['ino']
+            || (!$created && ($opened['dev'] !== $before['dev'] || $opened['ino'] !== $before['ino']))) {
+            fclose($file);
+            throw new DomainException($error);
+        }
+        return $file;
+    }
+
+    private function valid_journal_stat($stat, int $owner, bool $private): bool
+    {
+        return is_array($stat) && ($stat['mode'] & 0170000) === 0100000
+            && $stat['uid'] === $owner && $stat['nlink'] === 1
+            && (!$private || ($stat['mode'] & 0777) === 0600);
+    }
+
+    private function read_state($file, string $error): string
+    {
+        $stat = fstat($file);
+        if (!is_array($stat) || $stat['size'] > self::MAX_JOURNAL_BYTES || !rewind($file)) {
+            throw new DomainException($error);
+        }
+        $state = stream_get_contents($file, self::MAX_JOURNAL_BYTES + 1);
+        if (!is_string($state) || strlen($state) > self::MAX_JOURNAL_BYTES) {
+            throw new DomainException($error);
+        }
+        return $state;
     }
 
     private function mailbox_identity(string $folder, string $uid): string
@@ -54,12 +201,19 @@ class civicrm_filing
 
     private function status(string $identity): array|bool
     {
-        $path = $this->marker($identity);
-        if (!is_file($path) || !($file = fopen($path, 'rb'))) {
+        $file = false;
+        try {
+            $file = $this->open_journal($this->marker($identity), false, false, 'journalfailed');
+        } catch (DomainException $e) {
+            return false;
+        }
+        if (!$file) {
             return false;
         }
         try {
-            return flock($file, LOCK_SH) ? $this->read_marker($file) : true;
+            return flock($file, LOCK_SH | LOCK_NB) ? $this->read_marker($file) : true;
+        } catch (DomainException $e) {
+            return false;
         } finally {
             fclose($file);
         }
@@ -67,15 +221,16 @@ class civicrm_filing
 
     private function read_marker($file): array|bool
     {
-        $link = json_decode(stream_get_contents($file), true);
+        $link = json_decode($this->read_state($file, 'journalfailed'), true);
         return !empty($link['id']) && !empty($link['cid']) ? $link : true;
     }
 
     private function mark_confirmed(string $mailboxIdentity, int $id, int $contact): array|bool
     {
-        $file = fopen($this->marker($mailboxIdentity), 'c+b');
+        $file = false;
         try {
-            if (!$file || !flock($file, LOCK_EX)) {
+            $file = $this->open_journal($this->marker($mailboxIdentity), true, true, 'journalfailed');
+            if (!flock($file, LOCK_EX | LOCK_NB)) {
                 throw new DomainException('journalfailed');
             }
             $first = $this->read_marker($file);
@@ -89,7 +244,7 @@ class civicrm_filing
             error_log('[civicrm_addressbook] Could not update the filing indicator');
             return true;
         } finally {
-            if ($file) {
+            if (is_resource($file)) {
                 fclose($file);
             }
         }
@@ -243,15 +398,12 @@ class civicrm_filing
             'attachment-v2', $site, $activity, $part['id'], $part['name'], $part['type'],
             strlen($bytes), hash('sha256', $bytes),
         ]));
-        $file = fopen($this->directory() . '/attachment-' . $key, 'c+b');
-        if (!$file) {
-            throw new DomainException('attachmentfailed');
-        }
+        $file = $this->open_journal('attachment-' . $key, true, true, 'attachmentfailed');
         try {
-            if (!flock($file, LOCK_EX)) {
+            if (!flock($file, LOCK_EX | LOCK_NB)) {
                 throw new DomainException('attachmentfailed');
             }
-            $state = stream_get_contents($file);
+            $state = $this->read_state($file, 'attachmentfailed');
             if (ctype_digit($state) && (int) $state > 0) {
                 return;
             }
@@ -310,22 +462,16 @@ class civicrm_filing
 
         // Reserve before posting: a transport timeout can also occur after a successful create.
         $identity = $this->message_identity($subject, $headers, $body, $activityDate, $parts, $contents);
-        $dir = $this->directory();
-        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
-            throw new DomainException('journalfailed');
-        }
+        $this->directory(true);
         $key = hash('sha256', serialize([
             'activity-v2', $config->get('civicrm_api4_url'), $contact, $identity,
         ]));
-        $file = fopen($dir . '/' . $key, 'c+b');
-        if (!$file) {
-            throw new DomainException('journalfailed');
-        }
+        $file = $this->open_journal($key, true, true, 'journalfailed');
         try {
-            if (!flock($file, LOCK_EX)) {
+            if (!flock($file, LOCK_EX | LOCK_NB)) {
                 throw new DomainException('journalfailed');
             }
-            $state = stream_get_contents($file);
+            $state = $this->read_state($file, 'journalfailed');
             if (ctype_digit($state) && (int) $state > 0) {
                 return ['id' => (int) $state, 'already' => true,
                     'marker' => $this->mark_confirmed($mailboxIdentity, (int) $state, $contact)];
@@ -360,7 +506,7 @@ class civicrm_filing
     private function record($file, string $state): void
     {
         // Overwrite pending first so a partial final write cannot reopen the reservation.
-        if (!rewind($file) || fwrite($file, $state) !== strlen($state)
+        if (strlen($state) > self::MAX_JOURNAL_BYTES || !rewind($file) || fwrite($file, $state) !== strlen($state)
             || !ftruncate($file, strlen($state)) || !fflush($file)) {
             throw new DomainException('journalfailed');
         }
